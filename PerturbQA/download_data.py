@@ -6,7 +6,7 @@ Usage:
     python PerturbQA/download_data.py --dest /content/rbio/PerturbQA   # Colab
 """
 import argparse
-import sys
+import sys, os, shutil
 import zipfile
 from pathlib import Path
 
@@ -55,6 +55,9 @@ def main():
         with zipfile.ZipFile(tmp) as z:
             z.extractall(dest)
         tmp.unlink()
+        shutil.move(dest / "perturbqa" / "datasets" / "kg", dest)
+        os.rmdir(dest / "perturbqa" / "datasets")
+        os.rmdir(dest / "perturbqa")
 
     missing_kg  = [f for f in REQUIRED_KG       if not (dest / "kg" / f).exists()]
     missing_sum = [f for f in REQUIRED_SUMMARIES if not (dest / "gene_summary" / f).exists()]
