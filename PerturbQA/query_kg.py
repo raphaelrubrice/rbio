@@ -123,24 +123,33 @@ def fetch_rn_string(g, kg):
         nn_list.append(entry[0])
     return nn_list
 
-def fetch_rn_summaries(g, k=3, ref_kg="string", mode="g", s_path=None):
+def fetch_rn_summaries(g, k=3, ref_kg="string", mode="g", s_path=None,
+                       gene_summaries=None, warned=None):
     """
     Retrieves randomly k summaries amongst the gene's neighbors in the Knowledge graph.
+
+    gene_summaries: pre-loaded summaries dict; skips load_gs()/load_ps() when provided.
+    warned: a set of gene names already warned about; each missing gene is printed at most once.
     """
     if isinstance(ref_kg, str):
         ref_kg = load_kg(ref_kg)
-    
-    if mode == "g":
+
+    if gene_summaries is not None:
+        summaries = gene_summaries
+    elif mode == "g":
         summaries = load_gs(s_path)
     else:
         summaries = load_ps(s_path)
-    
+
     nn_summaries = {}
     if g in ref_kg.keys():
         nn_list = fetch_rn_string(g, ref_kg)
         nn_list = list(set(nn_list).intersection(set(summaries.keys())))
         if len(nn_list) == 0:
-            print(f"[WARNING] No summaries found for query {g}.")
+            if warned is None or g not in warned:
+                print(f"[WARNING] No summaries found for query {g}.")
+                if warned is not None:
+                    warned.add(g)
             return nn_summaries
         nn_list = rd.sample(nn_list, min(k, len(nn_list)))
         for nn_g in nn_list:

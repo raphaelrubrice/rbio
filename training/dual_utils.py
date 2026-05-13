@@ -25,22 +25,34 @@ def add_dual(df, gs, kg, k=3, n_random=25):
     perturbed_summaries, monitored_rn_summaries, potential_genes_list = [], [], []
     all_kg_genes = list(kg.keys())
 
+    summary_cache   = {}  # gene_p → pert_summary string
+    rn_cache        = {}  # gene_m → rn_str string
+    neighbors_cache = {}  # gene_m → set of STRING neighbors
+    warned          = set()  # genes already warned about missing summaries
+
     for _, row in df.iterrows():
         gene_p = row["gene_perturbed"].upper()
         gene_m = row["gene_monitored"].upper()
 
-        pert_summary = gs.get(gene_p, gs.get(gene_p.lower(), "No summary available."))
-        perturbed_summaries.append(pert_summary)
+        if gene_p not in summary_cache:
+            summary_cache[gene_p] = gs.get(gene_p, gs.get(gene_p.lower(), "No summary available."))
+        perturbed_summaries.append(summary_cache[gene_p])
 
-        rn = fetch_rn_summaries(gene_m, k=k, ref_kg=kg, mode="g")
-        rn_str = (
-            "\n".join(f"- {g}: {desc}" for g, desc in rn.items())
-            if rn
-            else "No neighbor summaries found."
-        )
-        monitored_rn_summaries.append(rn_str)
+        if gene_m not in rn_cache:
+            rn = fetch_rn_summaries(gene_m, k=k, ref_kg=kg, mode="g",
+                                    gene_summaries=gs, warned=warned)
+            rn_cache[gene_m] = (
+                "\n".join(f"- {g}: {desc}" for g, desc in rn.items())
+                if rn else "No neighbor summaries found."
+            )
+        monitored_rn_summaries.append(rn_cache[gene_m])
 
-        neighbors_m = set(fetch_rn_string(gene_m, kg)) if gene_m in kg else set()
+        if gene_m not in neighbors_cache:
+            neighbors_cache[gene_m] = (
+                set(fetch_rn_string(gene_m, kg)) if gene_m in kg else set()
+            )
+        neighbors_m = neighbors_cache[gene_m]
+
         pool = neighbors_m | set(random.sample(all_kg_genes, min(n_random, len(all_kg_genes))))
         pool.discard(gene_m)
         candidates = list(pool)
