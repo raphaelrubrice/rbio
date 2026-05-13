@@ -132,9 +132,10 @@ def setup_model_and_tokenizer(model_name: str):
 
 
 def create_training_config(output_dir: str, batch_size: int, num_generations: int,
-                          max_steps: int, save_every: int) -> GRPOConfig:
+                          max_steps: int, save_every: int, seed: int = 42) -> GRPOConfig:
     """Create GRPO training configuration compatible with DeepSpeed ZeRO stage 3"""
     config = GRPOConfig(
+        seed=seed,
         output_dir=output_dir,
         logging_steps=250,
         logging_first_step=True,
