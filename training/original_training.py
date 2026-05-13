@@ -30,8 +30,6 @@ from utils import (
     mlp_classifier_inference
 )
 
-from dual_utils import load_kg_data, add_dual, build_dual_prompt
-
 # Disabling logging
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["DISABLE_MLFLOW_INTEGRATION"] = "true"
@@ -158,19 +156,14 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
         )
 
         yield {
-            "prompt":                    prompt,
-            "label":                     sample["label"],
-            "classes":                   sample["classes"],
-            "class_confidences":         sample["class_confidences"],
-            "keywords":                  sample["keywords"],
-            "task":                      sample["task"],
-            "system_prompt":             sample["system_prompt"],
-            "user_prompt":               sample["user_prompt"],
-            "gene_perturbed":            row["gene_perturbed"],
-            "gene_monitored":            row["gene_monitored"],
-            "perturbed_gene_summary":    row["perturbed_gene_summary"],
-            "gene_monitored_rn_summaries": row["gene_monitored_rn_summaries"],
-            "potential_genes":           row["potential_genes"],
+            "prompt": prompt,
+            "label": sample["label"],
+            "classes": sample["classes"],
+            "class_confidences": sample["class_confidences"],
+            "keywords": sample["keywords"],
+            "task": sample["task"],
+            "system_prompt": sample["system_prompt"],
+            "user_prompt": sample["user_prompt"],
         }
 
 def load_and_prepare_dataset(dataset_paths: List[str], balance_pos_neg: bool = True) -> pd.DataFrame:
@@ -186,70 +179,6 @@ def load_and_prepare_dataset(dataset_paths: List[str], balance_pos_neg: bool = T
     print(f"Loaded dataset with {len(dataset_df)} rows")
     return dataset_df
 
-
-def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_pos_neg: bool = True):
-    """Generate training examples with dual tasks"""
-    if balance_pos_neg:
-        # Use 2x the dataset length to ensure enough samples for training
-        dataset_length = len(dataset_df) * 2
-    else:
-        dataset_length = len(dataset_df)
-
-    for i in range(dataset_length):
-        # Sample from dataset (with replacement for longer training)
-        sample_idx = i % len(dataset_df)
-        row = dataset_df.iloc[sample_idx]
-
-        # Prepare sample data for MLP classification
-        sample_data = {
-            "system_prompt": row["system_prompt"],
-            "user_prompt": row["user_prompt"],
-            "keywords": row["keywords"]
-        }
-
-        # Get MLP prediction
-        mlp_probability = mlp_classifier_inference(sample_data)
-
-        dual_prompt = make_dual(row["gene_perturbed"], row["gene_monitored"])
-        
-        # Determine label based on MLP probability
-        predicted_label = 1 if mlp_probability > 0.5 else 0
-
-        # Prepare sample with MLP-generated label
-        sample = {
-            "system_prompt": row["system_prompt"],
-            "user_prompt": row["user_prompt"],
-            "label": predicted_label,
-            "classes": "no|yes",
-            "class_confidences": f"{1.0-mlp_probability:.3f}|{mlp_probability:.3f}",
-            "keywords": row["keywords"],
-            "task": row["task"],
-            "mlp_probability": mlp_probability
-        }
-
-        # Format messages for chat template
-        messages = [
-            {"role": "system", "content": sample["system_prompt"]},
-            {"role": "user", "content": sample["user_prompt"]},
-        ]
-
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        yield {
-            "prompt": prompt,
-            "label": sample["label"],
-            "classes": sample["classes"],
-            "class_confidences": sample["class_confidences"],
-            "keywords": sample["keywords"],
-            "task": sample["task"],
-            "system_prompt": sample["system_prompt"],
-            "user_prompt": sample["user_prompt"],
-            "dual_prompt": sample["dual_prompt"]
-        }
-
-
 # # Rewards
 # `reward_answer_against_label` rewards the answer provided by the model (typically yes/no according to our prompts) by assigning the probability of the selected answer as estimated by the simplified VCM soft verifier.
 #
@@ -258,75 +187,6 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
 # `keywords_mentioned_in_think` makes sure specific keywords (typically gene names) are mentioned during reasoning.
 #
 # `compute_simple_reward` is used by the trainer to assign a reward to a generated trace.
-
-
-def make_rollout_fn(model, tokenizer, prompt_to_dual):
-    """Return a rollout_func that generates first completions, then dual completions."""
-    def rollout(prompts, trainer):
-        import torch.nn.functional as F
-        n_gen = trainer.args.num_generations
-
-        # First generation
-        enc = tokenizer(
-            prompts, return_tensors="pt", padding=True, truncation=True
-        ).to(model.device)
-        with torch.no_grad():
-            out = model.generate(
-                **enc,
-                max_new_tokens=256,
-                do_sample=True,
-                temperature=0.7,
-                num_return_sequences=n_gen,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
-
-        prompt_len     = enc["input_ids"].shape[1]
-        completion_ids = out.sequences[:, prompt_len:]
-        first_texts    = tokenizer.batch_decode(completion_ids, skip_special_tokens=True)
-
-        # Per-token log-probs
-        logprobs = torch.stack(
-            [F.log_softmax(s, dim=-1) for s in out.scores], dim=1
-        )
-        token_logprobs = logprobs.gather(2, completion_ids.unsqueeze(-1)).squeeze(-1)
-
-        prompt_ids_rep = enc["input_ids"].repeat_interleave(n_gen, dim=0)
-
-        # Build dual prompts conditioned on each first completion's answer
-        prompts_rep = [p for p in prompts for _ in range(n_gen)]
-        dual_prompts, gene_monitored_list = [], []
-        for p, first_text in zip(prompts_rep, first_texts):
-            dual = prompt_to_dual.get(p, {})
-            answer = extract_binary_answer(first_text)
-            answer_str = "yes" if answer is True else "no"
-            dual_prompts.append(build_dual_prompt(
-                dual.get("gene_perturbed", ""),
-                answer_str,
-                dual.get("perturbed_gene_summary", ""),
-                dual.get("gene_monitored_rn_summaries", ""),
-                dual.get("potential_genes", ""),
-            ))
-            gene_monitored_list.append(dual.get("gene_monitored", ""))
-
-        # Second generation
-        enc2 = tokenizer(
-            dual_prompts, return_tensors="pt", padding=True, truncation=True
-        ).to(model.device)
-        with torch.no_grad():
-            out2 = model.generate(**enc2, max_new_tokens=64, do_sample=False)
-        second_texts = tokenizer.batch_decode(
-            out2[:, enc2["input_ids"].shape[1]:], skip_special_tokens=True
-        )
-
-        return {
-            "prompt_ids":          prompt_ids_rep,
-            "completion_ids":      completion_ids,
-            "logprobs":            token_logprobs,
-            "second_completions":  second_texts,
-            "gene_monitored_list": gene_monitored_list,
-        }
-    return rollout
 
 
 def reward_answer_against_label(completion: str, classes: str, class_confidence: str) -> float:
@@ -396,53 +256,50 @@ def compute_simple_reward(
     classes: List[str],
     class_confidences: List[str],
     keywords: List[str],
-    second_completions: List[str] = None,
-    gene_monitored_list: List[str] = None,
     **kwargs
 ) -> List[float]:
-    """Compute rewards for model completions using format, mention, answer, and dual rewards."""
+    """Compute rewards for model completions using format, mention, and answer rewards"""
     scores = []
 
     global STEP_COUNT
 
-    for i, (completion, lbl, class_list, confidences, keyword_list) in enumerate(zip(
+    for completion, lbl, class_list, confidences, keyword_list in zip(
         completions, label, classes, class_confidences, keywords
-    )):
-        format_reward  = composite_formatting_reward(completion, use_go=False)
+    ):
+        # Format reward: checks proper tag structure
+        format_reward = composite_formatting_reward(completion, use_go=False)
+
+        # Mention reward: checks if keywords are mentioned in think sections
         mention_reward = keywords_mentioned_in_think(completion, keyword_list)
-        answer_reward  = reward_answer_against_label(completion, class_list, confidences)
 
-        dual_reward = 0.0
-        if second_completions and gene_monitored_list:
-            gene_m = gene_monitored_list[i].upper()
-            second = second_completions[i].upper()
-            dual_reward = 1.0 if gene_m in second else 0.0
+        # Answer reward: checks if answer matches expected label
+        answer_reward = reward_answer_against_label(completion, class_list, confidences)
 
-        total_score = format_reward + 2.0 * answer_reward + mention_reward + dual_reward
+        # Combine rewards (answer reward gets 2x weight as it's most important)
+        total_score = format_reward + 2.0 * answer_reward + mention_reward
+
         scores.append(total_score)
 
+        # Debug prints every 100 steps to monitor model outputs
         if STEP_COUNT % 100 == 0:
             print("\n" + "="*80)
             print(f"DEBUG: Sample {STEP_COUNT} - Step {STEP_COUNT}")
             print("="*80)
 
+            # Print the completion to see what the model generated
             print(f"MODEL OUTPUT:")
             print(f"{completion}")
             print()
 
-            if second_completions:
-                print(f"DUAL OUTPUT (gene_monitored={gene_monitored_list[i] if gene_monitored_list else '?'}):")
-                print(f"{second_completions[i]}")
-                print()
-
+            # Print reward breakdown
             print(f"REWARD BREAKDOWN:")
-            print(f"  Format reward:  {format_reward:.3f}")
+            print(f"  Format reward: {format_reward:.3f}")
             print(f"  Mention reward: {mention_reward:.3f}")
-            print(f"  Answer reward:  {answer_reward:.3f}")
-            print(f"  Dual reward:    {dual_reward:.3f}")
-            print(f"  Total score:    {total_score:.3f}")
+            print(f"  Answer reward: {answer_reward:.3f}")
+            print(f"  Total score: {total_score:.3f}")
             print()
 
+            # Print expected vs predicted
             print(f"EXPECTED vs PREDICTED:")
             print(f"  VCM binarized label: {lbl}")
             print(f"  Possible classes: {class_list}")
@@ -450,6 +307,7 @@ def compute_simple_reward(
             print(f"  Keywords: {keyword_list}")
             print()
 
+            # Print reward details
             print(f"REWARD DETAILS:")
             print(f"  Answer extraction: {extract_binary_answer(completion)}")
             print(f"  Think content: {extract_think(completion)[:100]}...")
@@ -472,29 +330,19 @@ dataset_df = load_and_prepare_dataset(DATASET_PATHS)
 print("Loading MLP classifier...")
 load_mlp_classifier(MLP_MODEL_PATH, EMBEDDING_FILE, MLPClassifier)
 
-# Load KG data once (gene summaries + STRING KG)
-print("Loading KG data for dual task...")
-gs, kg = load_kg_data()
-
-# Enrich dataset with dual task columns
-print("Adding dual task columns...")
-dataset_df = add_dual(dataset_df, gs, kg)
-
 # Setup model and tokenizer
 model, tokenizer = setup_model_and_tokenizer(MODEL_NAME)
 
-# Build dataset eagerly so we can construct the prompt→dual lookup for rollout_func
-print("Building dataset...")
-dataset_records = list(create_mlp_labeled_dataset_generator(
-    dataset_df=dataset_df, tokenizer=tokenizer, balance_pos_neg=True
-))
-dataset = Dataset.from_list(dataset_records)
-
-_DUAL_FIELDS = [
-    "gene_perturbed", "gene_monitored",
-    "perturbed_gene_summary", "gene_monitored_rn_summaries", "potential_genes",
-]
-prompt_to_dual = {r["prompt"]: {k: r[k] for k in _DUAL_FIELDS} for r in dataset_records}
+# Create streaming dataset generator
+print("Creating streaming dataset generator...")
+dataset = Dataset.from_generator(
+    create_mlp_labeled_dataset_generator,
+    gen_kwargs={
+        "dataset_df": dataset_df,
+        "tokenizer": tokenizer,
+        "balance_pos_neg": True,
+    },
+)
 
 # Create training configuration
 print("Setting up training configuration...")
@@ -513,7 +361,6 @@ trainer = GRPOTrainer(
     reward_funcs=compute_simple_reward,
     args=training_config,
     train_dataset=dataset,
-    rollout_func=make_rollout_fn(model, tokenizer, prompt_to_dual),
 )
 
 # Start training

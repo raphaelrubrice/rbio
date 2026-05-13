@@ -121,6 +121,8 @@ model_weights/
 predictions/
 results/
 *.csv
+*.json
+*.txt
 
 # AWS credentials
 .aws/
