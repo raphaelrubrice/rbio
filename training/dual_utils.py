@@ -14,7 +14,7 @@ def load_kg_data():
     return gs, kg
 
 
-def add_dual(df, gs, kg, k=3, n_random=25):
+def add_dual(df, gs, kg, k=3, n_random=5):
     """Add dual task columns to the dataset DataFrame.
 
     Adds:
@@ -93,8 +93,9 @@ def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
         f"For context, here is a summary of {gene_perturbed}:\n{perturbed_gene_summary}\n"
         f"For additional context, here are descriptions of randomly selected neighbors of the "
         f"mysterious gene in the knowledge graph:\n{gene_monitored_rn_summaries}\n"
-        f"The answer must be one of the following genes:\n{candidates}\n"
-        f"Answer with only the gene name."
+        f"You must answer with exactly one gene name from the following list and nothing else. "
+        f"Any answer not in this list is wrong:\n{candidates}\n"
+        f"Answer with only a gene name, exactly as written in the above list."
     )
 
 
