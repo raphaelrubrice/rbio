@@ -56,8 +56,8 @@ def add_dual(df, gs, kg, k=3, n_random=25):
         pool = neighbors_m | set(random.sample(all_kg_genes, min(n_random, len(all_kg_genes))))
         pool.discard(gene_m)
         candidates = list(pool)
-        random.shuffle(candidates)
         candidates.append(gene_m)
+        random.shuffle(candidates)
         potential_genes_list.append("|".join(candidates))
 
     df = df.copy()

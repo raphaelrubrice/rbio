@@ -145,7 +145,7 @@ def create_training_config(output_dir: str, batch_size: int, num_generations: in
         save_steps=save_every,
         max_steps=max_steps,
         learning_rate=1e-5,
-        warmup_steps=100,
+        warmup_steps=50,
         gradient_accumulation_steps=1,
         gradient_checkpointing=False,
         fp16=False,
