@@ -303,6 +303,7 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
             dual_prompts.append(build_dual_prompt(
                 dual.get("gene_perturbed", ""),
                 answer_str,
+                dual.get("perturbed_gene_summary", ""),
                 dual.get("gene_monitored_rn_summaries", ""),
                 dual.get("potential_genes", ""),
             ))
@@ -491,7 +492,7 @@ dataset = Dataset.from_list(dataset_records)
 
 _DUAL_FIELDS = [
     "gene_perturbed", "gene_monitored",
-    "gene_monitored_rn_summaries", "potential_genes",
+    "perturbed_gene_summary", "gene_monitored_rn_summaries", "potential_genes",
 ]
 prompt_to_dual = {r["prompt"]: {k: r[k] for k in _DUAL_FIELDS} for r in dataset_records}
 
