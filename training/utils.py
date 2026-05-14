@@ -152,7 +152,8 @@ def create_training_config(output_dir: str, batch_size: int, num_generations: in
         bf16=True,
         use_liger_kernel=True,
         dataloader_pin_memory=True,
-        dataloader_num_workers=0
+        dataloader_num_workers=0,
+        max_completion_length=200,
     )
 
     return config

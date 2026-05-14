@@ -57,6 +57,8 @@ DATASET_PATHS = [
     "./k562-train-v0.3.0.csv",
 ]
 
+THINK_BRIEF = "\nThink step by step, but be concise. Keep your reasoning under 100 words."
+
 # Set seeds globally
 set_random_seeds(42)
 
@@ -125,7 +127,7 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
 
         # Prepare sample data for MLP classification
         sample_data = {
-            "system_prompt": row["system_prompt"],
+            "system_prompt": row["system_prompt"] + THINK_BRIEF,
             "user_prompt": row["user_prompt"],
             "keywords": row["keywords"]
         }
@@ -204,7 +206,7 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
 
         # Prepare sample data for MLP classification
         sample_data = {
-            "system_prompt": row["system_prompt"],
+            "system_prompt": row["system_prompt"] + THINK_BRIEF,
             "user_prompt": row["user_prompt"],
             "keywords": row["keywords"]
         }
