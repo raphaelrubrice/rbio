@@ -137,7 +137,7 @@ def create_training_config(output_dir: str, batch_size: int, num_generations: in
     config = GRPOConfig(
         seed=seed,
         output_dir=output_dir,
-        logging_steps=250,
+        logging_steps=max(1, max_steps // 10),
         logging_first_step=True,
         per_device_train_batch_size=batch_size,
         num_generations=num_generations,
