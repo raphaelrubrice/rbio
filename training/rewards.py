@@ -75,8 +75,9 @@ def low_untagged_ratio(text: str) -> float:
     return ratio
 
 def is_not_too_long(text: str, max_words: int = 200) -> int:
-    """Check if text is not too long"""
-    word_count = len(re.findall(r"\b\w+\b", text))
+    """Check if the answer portion (outside <think> blocks) is not too long."""
+    answer_text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    word_count = len(re.findall(r"\b\w+\b", answer_text))
     return 1 if word_count <= max_words else 0
 
 

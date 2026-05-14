@@ -35,7 +35,7 @@ os.environ["WANDB_DISABLED"] = "true"
 os.environ["DISABLE_MLFLOW_INTEGRATION"] = "true"
 
 # Training configuration
-MODEL_NAME = "Qwen/Qwen3-4B-Thinking-2507-FP8" #"Qwen/Qwen2.5-3B-Instruct"
+MODEL_NAME = "Qwen/Qwen3-1.7B"
 N_STEPS = 100000
 BATCH_SIZE = 4
 NUM_GENERATIONS = 4

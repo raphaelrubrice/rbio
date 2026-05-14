@@ -11,6 +11,7 @@
 # ## Imports, global variables, random seeds
 
 import os
+import re
 from typing import List
 
 import pandas as pd
@@ -37,7 +38,7 @@ os.environ["WANDB_DISABLED"] = "true"
 os.environ["DISABLE_MLFLOW_INTEGRATION"] = "true"
 
 # Training configuration
-MODEL_NAME = "Qwen/Qwen3-4B-Thinking-2507-FP8" #"Qwen/Qwen2.5-3B-Instruct"
+MODEL_NAME = "Qwen/Qwen3-1.7B"
 N_STEPS = 100000
 BATCH_SIZE = 4
 NUM_GENERATIONS = 4
@@ -154,7 +155,8 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
         ]
 
         prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+            messages, tokenize=False, add_generation_prompt=True,
+            enable_thinking=True,
         )
 
         yield {
@@ -275,7 +277,9 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
                 **enc,
                 max_new_tokens=256,
                 do_sample=True,
-                temperature=0.7,
+                temperature=0.6,
+                top_p=0.95,
+                top_k=20,
                 num_return_sequences=n_gen,
                 return_dict_in_generate=True,
                 output_scores=True,
@@ -295,7 +299,7 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
 
         # Build dual prompts conditioned on each first completion's answer
         prompts_rep = [p for p in prompts for _ in range(n_gen)]
-        dual_prompts, gene_monitored_list = [], []
+        dual_prompts, gene_monitored_list, potential_genes_list = [], [], []
         for p, first_text in zip(prompts_rep, first_texts):
             dual = prompt_to_dual.get(p, {})
             answer = extract_binary_answer(first_text)
@@ -308,23 +312,37 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
                 dual.get("potential_genes", ""),
             ))
             gene_monitored_list.append(dual.get("gene_monitored", ""))
+            potential_genes_list.append(dual.get("potential_genes", ""))
 
-        # Second generation
+        # Second generation — format via chat template with thinking enabled
+        dual_chat_prompts = [
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": dp}],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=True,
+            )
+            for dp in dual_prompts
+        ]
         enc2 = tokenizer(
-            dual_prompts, return_tensors="pt", padding=True, truncation=True
+            dual_chat_prompts, return_tensors="pt", padding=True, truncation=True
         ).to(model.device)
         with torch.no_grad():
-            out2 = model.generate(**enc2, max_new_tokens=64, do_sample=False)
+            out2 = model.generate(
+                **enc2, max_new_tokens=256,
+                do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
+            )
         second_texts = tokenizer.batch_decode(
             out2[:, enc2["input_ids"].shape[1]:], skip_special_tokens=True
         )
 
         return {
-            "prompt_ids":          prompt_ids_rep,
-            "completion_ids":      completion_ids,
-            "logprobs":            token_logprobs,
-            "second_completions":  second_texts,
-            "gene_monitored_list": gene_monitored_list,
+            "prompt_ids":           prompt_ids_rep,
+            "completion_ids":       completion_ids,
+            "logprobs":             token_logprobs,
+            "second_completions":   second_texts,
+            "gene_monitored_list":  gene_monitored_list,
+            "potential_genes_list": potential_genes_list,
         }
     return rollout
 
@@ -398,6 +416,7 @@ def compute_simple_reward(
     keywords: List[str],
     second_completions: List[str] = None,
     gene_monitored_list: List[str] = None,
+    potential_genes_list: List[str] = None,
     **kwargs
 ) -> List[float]:
     """Compute rewards for model completions using format, mention, answer, and dual rewards."""
@@ -413,12 +432,28 @@ def compute_simple_reward(
         answer_reward  = reward_answer_against_label(completion, class_list, confidences)
 
         dual_reward = 0.0
+        dual_format_reward = 0.0
+        dual_mention_reward = 0.0
+        candidate_adherence = 0.0
+
         if second_completions and gene_monitored_list:
             gene_m = gene_monitored_list[i].upper()
-            second = second_completions[i].upper()
-            dual_reward = 1.0 if gene_m in second else 0.0
+            second = second_completions[i]
 
-        total_score = format_reward + 2.0 * answer_reward + mention_reward + dual_reward
+            dual_reward = 1.0 if gene_m in second.upper() else 0.0
+            dual_format_reward = composite_formatting_reward(second)
+            dual_mention_reward = keywords_mentioned_in_think(second, gene_m)
+
+            if potential_genes_list and i < len(potential_genes_list):
+                candidates = {g.upper() for g in potential_genes_list[i].split("|") if g}
+                answer_match = re.search(r'<answer>(.*?)</answer>', second, re.DOTALL | re.IGNORECASE)
+                answer_text = answer_match.group(1).strip().upper() if answer_match else second.strip().upper()
+                if any(c in answer_text for c in candidates):
+                    candidate_adherence = 0.15
+
+        total_score = (format_reward + 2.0 * answer_reward + mention_reward
+                       + dual_format_reward + dual_mention_reward + dual_reward
+                       + candidate_adherence)
         scores.append(total_score)
 
         if STEP_COUNT % 100 == 0:
@@ -436,11 +471,14 @@ def compute_simple_reward(
                 print()
 
             print(f"REWARD BREAKDOWN:")
-            print(f"  Format reward:  {format_reward:.3f}")
-            print(f"  Mention reward: {mention_reward:.3f}")
-            print(f"  Answer reward:  {answer_reward:.3f}")
-            print(f"  Dual reward:    {dual_reward:.3f}")
-            print(f"  Total score:    {total_score:.3f}")
+            print(f"  Format reward:        {format_reward:.3f}")
+            print(f"  Mention reward:       {mention_reward:.3f}")
+            print(f"  Answer reward:        {answer_reward:.3f}")
+            print(f"  Dual format reward:   {dual_format_reward:.3f}")
+            print(f"  Dual mention reward:  {dual_mention_reward:.3f}")
+            print(f"  Dual accuracy reward: {dual_reward:.3f}")
+            print(f"  Candidate adherence:  {candidate_adherence:.3f}")
+            print(f"  Total score:          {total_score:.3f}")
             print()
 
             print(f"EXPECTED vs PREDICTED:")
