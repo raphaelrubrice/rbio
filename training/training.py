@@ -329,7 +329,7 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
         ).to(model.device)
         with torch.no_grad():
             out2 = model.generate(
-                **enc2, max_new_tokens=256,
+                **enc2, max_new_tokens=512,
                 do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
             )
         second_texts = tokenizer.batch_decode(
@@ -440,13 +440,15 @@ def compute_simple_reward(
             gene_m = gene_monitored_list[i].upper()
             second = second_completions[i]
 
-            dual_reward = 1.0 if gene_m in second.upper() else 0.0
             dual_format_reward = composite_formatting_reward(second)
             dual_mention_reward = keywords_mentioned_in_think(second, gene_m)
 
+            answer_match = re.search(r'<answer>(.*?)</answer>', second, re.DOTALL | re.IGNORECASE)
+            # Only reward if gene appears inside a proper <answer> tag, not anywhere in the text
+            dual_reward = 1.0 if (answer_match and gene_m in answer_match.group(1).strip().upper()) else 0.0
+
             if potential_genes_list and i < len(potential_genes_list):
                 candidates = {g.upper() for g in potential_genes_list[i].split("|") if g}
-                answer_match = re.search(r'<answer>(.*?)</answer>', second, re.DOTALL | re.IGNORECASE)
                 answer_text = answer_match.group(1).strip().upper() if answer_match else second.strip().upper()
                 if any(c in answer_text for c in candidates):
                     candidate_adherence = 0.15

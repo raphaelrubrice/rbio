@@ -149,8 +149,9 @@ def create_training_config(output_dir: str, batch_size: int, num_generations: in
         gradient_accumulation_steps=1,
         gradient_checkpointing=False,
         fp16=False,
-        bf16=False,
-        dataloader_pin_memory=False,
+        bf16=True,
+        use_liger_kernel=True,
+        dataloader_pin_memory=True,
         dataloader_num_workers=0
     )
 
