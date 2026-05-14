@@ -88,14 +88,13 @@ def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
     candidates = potential_genes_str.replace("|", ", ")
     return (
         f"You have just predicted that a perturbation of the gene {gene_perturbed} {addon} likely to "
-        f"induce differential expression of a another mysterious gene (i.e. it cannot be {gene_perturbed} itself). Based on the context below and "
+        f"induce differential expression of a another mysterious gene (i.e. this other gene is not {gene_perturbed} itself). Based on the context below and "
         f"your internal knowledge, predict this other mysterious gene.\n"
         f"For context, here is a summary of {gene_perturbed}:\n{perturbed_gene_summary}\n"
         f"For additional context, here are descriptions of randomly selected neighbors of the "
         f"mysterious gene in the knowledge graph:\n{gene_monitored_rn_summaries}\n"
         f"You must answer with exactly one gene name from the following list and nothing else. "
         f"Any answer not in this list is wrong:\n{candidates}\n"
-        f"Answer with only a gene name, exactly as written in the above list."
     )
 
 
