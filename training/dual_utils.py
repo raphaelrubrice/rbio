@@ -91,8 +91,9 @@ def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
         f"induce differential expression of a another mysterious gene (i.e. this other gene is not {gene_perturbed} itself). Based on the context below and "
         f"your internal knowledge, predict this other mysterious gene.\n"
         f"For context, here is a summary of {gene_perturbed}:\n{perturbed_gene_summary}\n"
-        f"For additional context, here are descriptions of randomly selected neighbors of the "
-        f"mysterious gene in the knowledge graph:\n{gene_monitored_rn_summaries}\n"
+        f"For additional context, here are descriptions of some known neighbors of the mysterious "
+        f"gene in the knowledge graph. These neighbor genes are clues only — they are NOT the "
+        f"answer:\n{gene_monitored_rn_summaries}\n"
         f"You must answer with exactly one gene name from the following list and nothing else. "
         f"Any answer not in this list is wrong:\n{candidates}\n"
     )
