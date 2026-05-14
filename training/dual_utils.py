@@ -87,9 +87,9 @@ def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
     addon = "is" if answer == "yes" else "is not"
     candidates = potential_genes_str.replace("|", ", ")
     return (
-        f"You have just predicted that a perturbation of {gene_perturbed} {addon} likely to "
-        f"induce differential expression of a mysterious gene. Based on the context below and "
-        f"your internal knowledge, predict the mysterious gene.\n"
+        f"You have just predicted that a perturbation of the gene {gene_perturbed} {addon} likely to "
+        f"induce differential expression of a another mysterious gene (i.e. it cannot be {gene_perturbed} itself). Based on the context below and "
+        f"your internal knowledge, predict this other mysterious gene.\n"
         f"For context, here is a summary of {gene_perturbed}:\n{perturbed_gene_summary}\n"
         f"For additional context, here are descriptions of randomly selected neighbors of the "
         f"mysterious gene in the knowledge graph:\n{gene_monitored_rn_summaries}\n"
