@@ -128,6 +128,9 @@ def setup_model_and_tokenizer(model_name: str):
     print(f"Model dtype: {next(model.parameters()).dtype}")
     print(f"Model device: {next(model.parameters()).device}")
 
+    _tool_call_ids = tokenizer("<tool_call>", add_special_tokens=False)["input_ids"]
+    model.generation_config.bad_words_ids = [_tool_call_ids]
+
     return model, tokenizer
 
 
