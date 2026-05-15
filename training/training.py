@@ -57,7 +57,20 @@ DATASET_PATHS = [
     "./k562-train-v0.3.0.csv",
 ]
 
-THINK_BRIEF = "\nThink step by step, but be concise. Keep your reasoning under 100 words."
+THINK_BRIEF_PRIMARY = (
+    "\nWhen reasoning, use exactly 2 steps:\n"
+    "1) In 1 sentence only: recall what the perturbed gene and the monitored gene do. Do not elaborate.\n"
+    "2) In 1 sentence only: state whether perturbation of one would affect the other. Do not elaborate.\n"
+    "Then immediately write your answer."
+)
+
+THINK_BRIEF_DUAL = (
+    "When reasoning, follow exactly these 3 steps in your <think> block:\n"
+    "1) In 1 sentence only: recall the key function of the perturbed gene. Do not elaborate.\n"
+    "2) In 1 sentence only: recall what the neighbor genes suggest about the mysterious gene. Do not elaborate.\n"
+    "3) In 1 sentence only: state your principled choice from the candidate list and why. Do not elaborate.\n"
+    "Then immediately write your answer."
+)
 
 # Set seeds globally
 set_random_seeds(42)
@@ -127,7 +140,7 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
 
         # Prepare sample data for MLP classification
         sample_data = {
-            "system_prompt": row["system_prompt"] + THINK_BRIEF,
+            "system_prompt": row["system_prompt"],
             "user_prompt": row["user_prompt"],
             "keywords": row["keywords"]
         }
@@ -152,7 +165,7 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
 
         # Format messages for chat template
         messages = [
-            {"role": "system", "content": sample["system_prompt"]},
+            {"role": "system", "content": sample["system_prompt"] + THINK_BRIEF_PRIMARY},
             {"role": "user", "content": sample["user_prompt"]},
         ]
 
@@ -206,7 +219,7 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
 
         # Prepare sample data for MLP classification
         sample_data = {
-            "system_prompt": row["system_prompt"] + THINK_BRIEF,
+            "system_prompt": row["system_prompt"],
             "user_prompt": row["user_prompt"],
             "keywords": row["keywords"]
         }
@@ -215,7 +228,7 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
         mlp_probability = mlp_classifier_inference(sample_data)
 
         dual_prompt = make_dual(row["gene_perturbed"], row["gene_monitored"])
-        
+
         # Determine label based on MLP probability
         predicted_label = 1 if mlp_probability > 0.5 else 0
 
@@ -233,7 +246,7 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
 
         # Format messages for chat template
         messages = [
-            {"role": "system", "content": sample["system_prompt"]},
+            {"role": "system", "content": sample["system_prompt"] + THINK_BRIEF_PRIMARY},
             {"role": "user", "content": sample["user_prompt"]},
         ]
 
@@ -301,7 +314,7 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
 
         # Build dual prompts conditioned on each first completion's answer
         prompts_rep = [p for p in prompts for _ in range(n_gen)]
-        dual_prompts, gene_monitored_list, potential_genes_list = [], [], []
+        dual_prompts, dual_system_prompts, gene_monitored_list, potential_genes_list = [], [], [], []
         for p, first_text in zip(prompts_rep, first_texts):
             dual = prompt_to_dual.get(p, {})
             answer = extract_binary_answer(first_text)
@@ -313,18 +326,22 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
                 dual.get("gene_monitored_rn_summaries", ""),
                 dual.get("potential_genes", ""),
             ))
+            dual_system_prompts.append(dual.get("system_prompt", ""))
             gene_monitored_list.append(dual.get("gene_monitored", ""))
             potential_genes_list.append(dual.get("potential_genes", ""))
 
         # Second generation — format via chat template with thinking enabled
         dual_chat_prompts = [
             tokenizer.apply_chat_template(
-                [{"role": "user", "content": dp}],
+                [
+                    {"role": "system", "content": sys_p + THINK_BRIEF_DUAL},
+                    {"role": "user", "content": dp},
+                ],
                 tokenize=False,
                 add_generation_prompt=True,
                 enable_thinking=True,
             )
-            for dp in dual_prompts
+            for sys_p, dp in zip(dual_system_prompts, dual_prompts)
         ]
         enc2 = tokenizer(
             dual_chat_prompts, return_tensors="pt", padding=True, truncation=True
@@ -535,6 +552,7 @@ dataset = Dataset.from_list(dataset_records)
 _DUAL_FIELDS = [
     "gene_perturbed", "gene_monitored",
     "perturbed_gene_summary", "gene_monitored_rn_summaries", "potential_genes",
+    "system_prompt",
 ]
 prompt_to_dual = {r["prompt"]: {k: r[k] for k in _DUAL_FIELDS} for r in dataset_records}
 
