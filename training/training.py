@@ -476,7 +476,7 @@ def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_S
         inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
         with torch.no_grad():
             out = model.generate(**inputs,
-                max_new_tokens=200, do_sample=False,
+                max_new_tokens=200, do_sample=False, temperature=None,
                 eos_token_id=model.generation_config.eos_token_id,
                 pad_token_id=model.generation_config.pad_token_id,
             )
