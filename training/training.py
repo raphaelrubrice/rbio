@@ -17,6 +17,8 @@ from typing import List
 import pandas as pd
 import torch
 from torch import nn
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
 from datasets import Dataset
 from trl import GRPOTrainer
@@ -44,6 +46,7 @@ BATCH_SIZE = 4
 NUM_GENERATIONS = 4
 SAVE_EVERY = 10000
 OUTPUT_DIR = "./checkpoints"
+EVAL_SAMPLES = 50
 
 # Global step counter
 STEP_COUNT = 0
@@ -190,83 +193,6 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
             "potential_genes":           row["potential_genes"],
         }
 
-def load_and_prepare_dataset(dataset_paths: List[str], balance_pos_neg: bool = True) -> pd.DataFrame:
-    """Load CSV datasets and combine them into a single DataFrame"""
-    if len(dataset_paths) == 1:
-        dataset_df = pd.read_csv(dataset_paths[0])
-    else:
-        dataset_list = []
-        for path in dataset_paths:
-            dataset_list.append(pd.read_csv(path))
-        dataset_df = pd.concat(dataset_list, ignore_index=True)
-
-    print(f"Loaded dataset with {len(dataset_df)} rows")
-    return dataset_df
-
-
-def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_pos_neg: bool = True):
-    """Generate training examples with dual tasks"""
-    if balance_pos_neg:
-        # Use 2x the dataset length to ensure enough samples for training
-        dataset_length = len(dataset_df) * 2
-    else:
-        dataset_length = len(dataset_df)
-
-    for i in range(dataset_length):
-        # Sample from dataset (with replacement for longer training)
-        sample_idx = i % len(dataset_df)
-        row = dataset_df.iloc[sample_idx]
-
-        # Prepare sample data for MLP classification
-        sample_data = {
-            "system_prompt": row["system_prompt"],
-            "user_prompt": row["user_prompt"],
-            "keywords": row["keywords"]
-        }
-
-        # Get MLP prediction
-        mlp_probability = mlp_classifier_inference(sample_data)
-
-        dual_prompt = make_dual(row["gene_perturbed"], row["gene_monitored"])
-
-        # Determine label based on MLP probability
-        predicted_label = 1 if mlp_probability > 0.5 else 0
-
-        # Prepare sample with MLP-generated label
-        sample = {
-            "system_prompt": row["system_prompt"],
-            "user_prompt": row["user_prompt"],
-            "label": predicted_label,
-            "classes": "no|yes",
-            "class_confidences": f"{1.0-mlp_probability:.3f}|{mlp_probability:.3f}",
-            "keywords": row["keywords"],
-            "task": row["task"],
-            "mlp_probability": mlp_probability
-        }
-
-        # Format messages for chat template
-        messages = [
-            {"role": "system", "content": sample["system_prompt"] + THINK_BRIEF_PRIMARY},
-            {"role": "user", "content": sample["user_prompt"]},
-        ]
-
-        prompt = tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        yield {
-            "prompt": prompt,
-            "label": sample["label"],
-            "classes": sample["classes"],
-            "class_confidences": sample["class_confidences"],
-            "keywords": sample["keywords"],
-            "task": sample["task"],
-            "system_prompt": sample["system_prompt"],
-            "user_prompt": sample["user_prompt"],
-            "dual_prompt": sample["dual_prompt"]
-        }
-
-
 # # Rewards
 # `reward_answer_against_label` rewards the answer provided by the model (typically yes/no according to our prompts) by assigning the probability of the selected answer as estimated by the simplified VCM soft verifier.
 #
@@ -279,6 +205,7 @@ def create_dual_dataset_generator(dataset_df: pd.DataFrame, tokenizer, balance_p
 
 def make_rollout_fn(model, tokenizer, prompt_to_dual):
     """Return a rollout_func that generates first completions, then dual completions."""
+    _printed = [False]
     def rollout(prompts, trainer):
         import torch.nn.functional as F
         n_gen = trainer.args.num_generations
@@ -343,6 +270,8 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
             )
             for sys_p, dp in zip(dual_system_prompts, dual_prompts)
         ]
+        tokenizer.padding_side = "left"
+        _tool_call_ids = tokenizer("<tool_call>", add_special_tokens=False)["input_ids"]
         enc2 = tokenizer(
             dual_chat_prompts, return_tensors="pt", padding=True, truncation=True
         ).to(model.device)
@@ -350,10 +279,23 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
             out2 = model.generate(
                 **enc2, max_new_tokens=512,
                 do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
+                eos_token_id=model.generation_config.eos_token_id,
+                pad_token_id=model.generation_config.pad_token_id,
+                bad_words_ids=[_tool_call_ids],
             )
         second_texts = tokenizer.batch_decode(
             out2[:, enc2["input_ids"].shape[1]:], skip_special_tokens=True
         )
+        second_texts = [re.sub(r'<tool_call>.*', '', t, flags=re.DOTALL).strip()
+                        for t in second_texts]
+
+        if not _printed[0]:
+            _printed[0] = True
+            print("\n[BINARY DEBUG] First batch sample:")
+            print(f"  Binary completion:  {first_texts[0]}")
+            if second_texts:
+                print(f"  Dual completion:    {second_texts[0]}")
+                print(f"  gene_monitored:     {gene_monitored_list[0]}")
 
         return {
             "prompt_ids":           prompt_ids_rep,
@@ -518,6 +460,45 @@ def compute_simple_reward(
     return scores
 
 
+def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_SAMPLES) -> dict:
+    """Run greedy inference on n test rows; return accuracy, F1, precision, recall vs MLP labels."""
+    model.eval()
+    y_true, y_pred = [], []
+    sample = test_df.head(n)
+    for _, row in sample.iterrows():
+        messages = [
+            {"role": "system", "content": row["system_prompt"] + THINK_BRIEF_PRIMARY},
+            {"role": "user",   "content": row["user_prompt"]},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=True,
+        )
+        inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
+        with torch.no_grad():
+            out = model.generate(**inputs,
+                max_new_tokens=200, do_sample=False,
+                eos_token_id=model.generation_config.eos_token_id,
+                pad_token_id=model.generation_config.pad_token_id,
+            )
+        completion = tokenizer.decode(
+            out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True
+        )
+        predicted = extract_binary_answer(completion)
+        if predicted is not None:
+            y_pred.append(1 if predicted else 0)
+            true_str = row["classes"].split("|")[row["label"]]
+            y_true.append(1 if true_str.lower() == "yes" else 0)
+    model.train()
+    if not y_true:
+        return {"accuracy": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
+    return {
+        "accuracy":  accuracy_score(y_true, y_pred),
+        "f1":        f1_score(y_true, y_pred, zero_division=0),
+        "precision": precision_score(y_true, y_pred, zero_division=0),
+        "recall":    recall_score(y_true, y_pred, zero_division=0),
+    }
+
+
 # # Training
 
 
@@ -526,6 +507,10 @@ print("Starting RBIO training with streaming MLP labeling...")
 # Load and prepare dataset
 print("Loading dataset...")
 dataset_df = load_and_prepare_dataset(DATASET_PATHS)
+train_df, test_df = train_test_split(dataset_df, test_size=0.2, random_state=42)
+train_df = train_df.reset_index(drop=True)
+test_df  = test_df.reset_index(drop=True)
+print(f"Train: {len(train_df)} rows  |  Test: {len(test_df)} rows")
 
 # Load MLP classifier
 print("Loading MLP classifier...")
@@ -537,7 +522,7 @@ gs, kg = load_kg_data()
 
 # Enrich dataset with dual task columns
 print("Adding dual task columns...")
-dataset_df = add_dual(dataset_df, gs, kg)
+train_df = add_dual(train_df, gs, kg)
 
 # Setup model and tokenizer
 model, tokenizer = setup_model_and_tokenizer(MODEL_NAME)
@@ -545,7 +530,7 @@ model, tokenizer = setup_model_and_tokenizer(MODEL_NAME)
 # Build dataset eagerly so we can construct the prompt→dual lookup for rollout_func
 print("Building dataset...")
 dataset_records = list(create_mlp_labeled_dataset_generator(
-    dataset_df=dataset_df, tokenizer=tokenizer, balance_pos_neg=True
+    dataset_df=train_df, tokenizer=tokenizer, balance_pos_neg=True
 ))
 dataset = Dataset.from_list(dataset_records)
 
@@ -581,6 +566,11 @@ print(f"Starting training for {N_STEPS} steps...")
 trainer.train()
 
 print("Training completed!")
+
+print("Evaluating on held-out set...")
+metrics = evaluate_on_holdout(model, tokenizer, test_df)
+print(f"Held-out — Accuracy: {metrics['accuracy']:.3f}  F1: {metrics['f1']:.3f}  "
+      f"Precision: {metrics['precision']:.3f}  Recall: {metrics['recall']:.3f}")
 
 
 # ## Notes
