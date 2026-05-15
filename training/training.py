@@ -493,9 +493,9 @@ def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_S
         return {"accuracy": 0.0, "f1": 0.0, "precision": 0.0, "recall": 0.0}
     return {
         "accuracy":  accuracy_score(y_true, y_pred),
-        "f1":        f1_score(y_true, y_pred, zero_division=0),
-        "precision": precision_score(y_true, y_pred, zero_division=0),
-        "recall":    recall_score(y_true, y_pred, zero_division=0),
+        "f1":        f1_score(y_true, y_pred, zero_division=0, average="macro"),
+        "precision": precision_score(y_true, y_pred, zero_division=0, average="macro"),
+        "recall":    recall_score(y_true, y_pred, zero_division=0, average="macro"),
     }
 
 
