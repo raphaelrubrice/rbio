@@ -84,7 +84,7 @@ def add_dual(df, gs, kg, k=3, n_random=5):
 def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
                       gene_monitored_rn_summaries, potential_genes_str):
     """Build the dual-task prompt conditioned on the first completion's answer."""
-    addon = "is" if answer == "yes" else "is not"
+    addon = "**IS**" if answer == "yes" else "**IS NOT**"
     candidates = potential_genes_str.replace("|", ", ")
     return (
         f"You have just predicted that a perturbation of the gene {gene_perturbed} {addon} likely to "
@@ -92,7 +92,7 @@ def build_dual_prompt(gene_perturbed, answer, perturbed_gene_summary,
         f"your internal knowledge, predict this other mysterious gene.\n"
         f"For context, here is a summary of {gene_perturbed}:\n{perturbed_gene_summary}\n"
         f"For additional context, here are descriptions of some known neighbors of the mysterious "
-        f"gene in the knowledge graph. **These neighbor genes are clues only — they are NOT the "
+        f"gene in the knowledge graph. **These neighbor genes are clues only: they ARE NOT the "
         f"answer**:\n{gene_monitored_rn_summaries}\n"
         f"**You must answer with exactly one gene name from the following list and nothing else."
         f"Any answer not in this list is wrong:\n{candidates}\n**"
