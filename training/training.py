@@ -49,6 +49,16 @@ OUTPUT_DIR = "./checkpoints"
 EVAL_SAMPLES = 50
 CLASS_WEIGHT_YES = 3.0    # minority-class amplifier (avoids lazy-"no" attractor)
 DUAL_WARMUP_STEPS = 50    # activate dual reward only after format has stabilized
+SYSTEM_PROMPT = (
+    "A conversation between User and Biologist. The user asks a question, and the Biologist "
+    "solves it. The biologist first thinks about the reasoning process in the mind and then "
+    "provides the user with the answer. The reasoning process and answer are enclosed within "
+    "<think> </think> and <answer> </answer> tags, respectively. Exemple: \n"
+    "<think> \n"
+    "your reasoning process here..\n"
+    "</think> \n"
+    "<answer> your answer here.. </answer>"
+)
 
 # Global step counter
 STEP_COUNT = 0
@@ -145,7 +155,7 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
 
         # Prepare sample data for MLP classification
         sample_data = {
-            "system_prompt": row["system_prompt"],
+            "system_prompt": SYSTEM_PROMPT,
             "user_prompt": row["user_prompt"],
             "keywords": row["keywords"]
         }
@@ -158,7 +168,7 @@ def create_mlp_labeled_dataset_generator(dataset_df: pd.DataFrame, tokenizer, ba
 
         # Prepare sample with MLP-generated label
         sample = {
-            "system_prompt": row["system_prompt"],
+            "system_prompt": SYSTEM_PROMPT,
             "user_prompt": row["user_prompt"],
             "label": predicted_label,
             "classes": "no|yes",
@@ -255,7 +265,7 @@ def make_rollout_fn(model, tokenizer, prompt_to_dual):
                 dual.get("gene_monitored_rn_summaries", ""),
                 dual.get("potential_genes", ""),
             ))
-            dual_system_prompts.append(dual.get("system_prompt", ""))
+            dual_system_prompts.append(SYSTEM_PROMPT)
             gene_monitored_list.append(dual.get("gene_monitored", ""))
             potential_genes_list.append(dual.get("potential_genes", ""))
 
@@ -466,7 +476,7 @@ def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_S
     sample = test_df.head(n)
     for _, row in sample.iterrows():
         messages = [
-            {"role": "system", "content": row["system_prompt"] + THINK_BRIEF_PRIMARY},
+            {"role": "system", "content": SYSTEM_PROMPT + THINK_BRIEF_PRIMARY},
             {"role": "user",   "content": row["user_prompt"]},
         ]
         prompt = tokenizer.apply_chat_template(
@@ -541,7 +551,6 @@ dataset = Dataset.from_list(dataset_records)
 _DUAL_FIELDS = [
     "gene_perturbed", "gene_monitored",
     "perturbed_gene_summary", "gene_monitored_rn_summaries", "potential_genes",
-    "system_prompt",
 ]
 prompt_to_dual = {r["prompt"]: {k: r[k] for k in _DUAL_FIELDS} for r in dataset_records}
 
