@@ -408,7 +408,7 @@ def compute_simple_reward(
             second = second_completions[i]
 
             dual_format_reward = composite_formatting_reward(second)
-            dual_mention_reward = keywords_mentioned_in_think(second, gene_m)
+            dual_mention_reward = gene_in_think(second, gene_m)
             dual_reward = extract_dual_answer(second, gene_m)
 
         total_score = (format_reward + 2.0 * answer_reward + mention_reward
@@ -460,7 +460,7 @@ def compute_simple_reward(
 
 
 def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_SAMPLES) -> dict:
-    """Run greedy inference on n test rows; return accuracy, F1, precision, recall vs MLP labels."""
+    """Run sampled inference on n test rows; return accuracy, F1, precision, recall vs MLP labels."""
     model.eval()
     y_true, y_pred = [], []
     sample = test_df.head(n)
@@ -474,8 +474,13 @@ def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_S
         )
         inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
         with torch.no_grad():
+            # GRPOTrainer sets generation_config.do_sample=False globally; restore for eval
+            model.generation_config.do_sample = True
+            model.generation_config.temperature = 0.6
+            model.generation_config.top_p = 0.95
+            model.generation_config.top_k = 20
             out = model.generate(**inputs,
-                max_new_tokens=200, do_sample=False,
+                max_new_tokens=200, do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
                 eos_token_id=model.generation_config.eos_token_id,
                 pad_token_id=model.generation_config.pad_token_id,
             )

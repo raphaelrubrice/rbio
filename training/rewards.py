@@ -69,6 +69,19 @@ def extract_think(completion: str) -> str:
     think_matches = re.findall(r"<think>(.*?)</think>", completion, re.DOTALL | re.IGNORECASE)
     return " ".join(think_matches)
 
+def gene_in_think(text: str, gene_m: str) -> float:
+    """Check if gene appears in think reasoning, case-insensitive with unclosed-tag fallback."""
+    gene_m_upper = gene_m.upper()
+    # Try properly closed <think>...</think> blocks
+    think_content = extract_think(text)
+    if think_content and gene_m_upper in think_content.upper():
+        return 1.0
+    # Fallback: everything before <answer> (captures unclosed think content)
+    pre_answer = re.split(r'<answer>', text, maxsplit=1, flags=re.IGNORECASE)[0]
+    if gene_m_upper in pre_answer.upper():
+        return 1.0
+    return 0.0
+
 def has_at_least_one_think(text: str) -> int:
     """Check if text has at least one think tag"""
     return 1 if re.search(r"<think>", text, re.IGNORECASE) else 0
