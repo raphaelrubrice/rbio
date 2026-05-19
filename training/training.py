@@ -42,11 +42,13 @@ os.environ["DISABLE_MLFLOW_INTEGRATION"] = "true"
 # Training configuration
 MODEL_NAME = "Qwen/Qwen3-1.7B"
 N_STEPS = 100000
-BATCH_SIZE = 4
-NUM_GENERATIONS = 4
+BATCH_SIZE = 2
+NUM_GENERATIONS = 8
 SAVE_EVERY = 10000
 OUTPUT_DIR = "./checkpoints"
 EVAL_SAMPLES = 50
+CLASS_WEIGHT_YES = 3.0    # minority-class amplifier (avoids lazy-"no" attractor)
+DUAL_WARMUP_STEPS = 50    # activate dual reward only after format has stabilized
 
 # Global step counter
 STEP_COUNT = 0
@@ -392,32 +394,30 @@ def compute_simple_reward(
         mention_reward = keywords_mentioned_in_think(completion, keyword_list)
         answer_reward  = reward_answer_against_label(completion, class_list, confidences)
 
+        # Upweight minority "yes" class to counter the lazy-"no" attractor
+        if lbl == 1:
+            answer_reward *= CLASS_WEIGHT_YES
+
         dual_reward = 0.0
         dual_format_reward = 0.0
         dual_mention_reward = 0.0
-        candidate_adherence = 0.0
 
-        if second_completions and gene_monitored_list:
+        _dual_active = bool(second_completions and gene_monitored_list and STEP_COUNT >= DUAL_WARMUP_STEPS)
+        if _dual_active:
             gene_m = gene_monitored_list[i].upper()
             second = second_completions[i]
 
             dual_format_reward = composite_formatting_reward(second)
             dual_mention_reward = keywords_mentioned_in_think(second, gene_m)
-
-            answer_match = re.search(r'<answer>(.*?)</answer>', second, re.DOTALL | re.IGNORECASE)
-            # Only reward if gene appears inside a proper <answer> tag, not anywhere in the text
-            dual_reward = 1.0 if (answer_match and gene_m in answer_match.group(1).strip().upper()) else 0.0
-
-            if potential_genes_list and i < len(potential_genes_list):
-                candidates = {g.upper() for g in potential_genes_list[i].split("|") if g}
-                answer_text = answer_match.group(1).strip().upper() if answer_match else second.strip().upper()
-                if any(c in answer_text for c in candidates):
-                    candidate_adherence = 0.15
+            dual_reward = extract_dual_answer(second, gene_m)
 
         total_score = (format_reward + 2.0 * answer_reward + mention_reward
-                       + dual_format_reward + dual_mention_reward + dual_reward
-                       + candidate_adherence)
-        scores.append(total_score)
+                       + dual_format_reward + dual_mention_reward + dual_reward)
+
+        # Normalize to [0, 1] so no-dual and dual curves are comparable in plots
+        _answer_max = 1.0 * CLASS_WEIGHT_YES if lbl == 1 else 1.0
+        _ceiling = 2.0 + 2.0 * _answer_max + (3.0 if _dual_active else 0.0)
+        scores.append(total_score / _ceiling)
 
         if STEP_COUNT % 100 == 0:
             print("\n" + "="*80)
@@ -439,8 +439,7 @@ def compute_simple_reward(
             print(f"  Answer reward:        {answer_reward:.3f}")
             print(f"  Dual format reward:   {dual_format_reward:.3f}")
             print(f"  Dual mention reward:  {dual_mention_reward:.3f}")
-            print(f"  Dual accuracy reward: {dual_reward:.3f}")
-            print(f"  Candidate adherence:  {candidate_adherence:.3f}")
+            print(f"  Dual reward:          {dual_reward:.3f}")
             print(f"  Total score:          {total_score:.3f}")
             print()
 
@@ -476,7 +475,7 @@ def evaluate_on_holdout(model, tokenizer, test_df: pd.DataFrame, n: int = EVAL_S
         inputs = tokenizer([prompt], return_tensors="pt").to(model.device)
         with torch.no_grad():
             out = model.generate(**inputs,
-                max_new_tokens=200, do_sample=False, temperature=None,
+                max_new_tokens=200, do_sample=False,
                 eos_token_id=model.generation_config.eos_token_id,
                 pad_token_id=model.generation_config.pad_token_id,
             )

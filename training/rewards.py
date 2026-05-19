@@ -48,6 +48,22 @@ def extract_binary_answer(completion: str) -> Optional[bool]:
     
     return None
 
+def extract_dual_answer(text: str, gene_m: str) -> float:
+    """Tiered dual reward mirroring the primal extract_binary_answer fallback logic."""
+    gene_m = gene_m.upper()
+    # Tier 1: gene inside proper <answer>...</answer> tag
+    answer_match = re.search(r'<answer>(.*?)</answer>', text, re.DOTALL | re.IGNORECASE)
+    if answer_match and gene_m in answer_match.group(1).strip().upper():
+        return 1.0
+    # Tier 2: gene appears after last </think> (correct position, tag missing or unclosed)
+    last_think = text.upper().rfind('</THINK>')
+    if last_think != -1 and gene_m in text[last_think:].upper():
+        return 0.5
+    # Tier 3: gene mentioned anywhere in reasoning
+    if gene_m in text.upper():
+        return 0.2
+    return 0.0
+
 def extract_think(completion: str) -> str:
     """Extract content from think tags"""
     think_matches = re.findall(r"<think>(.*?)</think>", completion, re.DOTALL | re.IGNORECASE)
