@@ -147,4 +147,46 @@ def has_limited_thinks(text: str, max_thinks: int = 3) -> int:
     return 1 if think_count <= max_thinks else 0
 
 
+def reward_answer_against_label(completion: str, classes: str, class_confidence: str) -> float:
+    answer = extract_binary_answer(completion)
+    if answer is None:
+        return 0.0
+    answer = "yes" if answer else "no"
+    possible_classes = classes.split("|")
+    confidences = [float(c) for c in class_confidence.split("|")]
+    for label, conf in zip(possible_classes, confidences):
+        if answer == label.strip().lower():
+            return conf
+    return 0.0
+
+
+def composite_formatting_reward(text: str, use_go: bool = False) -> float:
+    at_least_one_think = has_at_least_one_think(text)
+    has_tags = has_any_tag(text)
+    checks = [
+        at_least_one_think,
+        low_untagged_ratio(text),
+        is_not_too_long(text),
+        has_one_answer(text),
+        answer_after_thinks(text),
+        thinks_have_text(text) * at_least_one_think,
+        no_nested_tags(text) * has_tags,
+        has_limited_thinks(text) * at_least_one_think,
+        all_tags_properly_closed(text) * has_tags,
+        ends_with_answer(text),
+        starts_with_think(text),
+    ]
+    if use_go:
+        checks = checks[:-1]
+    return sum(checks) / len(checks)
+
+
+def keywords_mentioned_in_think(text: str, keywords: str) -> float:
+    keyword_list = [k for k in keywords.split("|") if k]
+    if not keyword_list:
+        return 1.0
+    think_contents = extract_think(text)
+    if not think_contents:
+        return 0.0
+    return sum(1 for kw in keyword_list if kw in think_contents) / len(keyword_list)
 

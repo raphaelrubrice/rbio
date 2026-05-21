@@ -120,6 +120,7 @@ model_weights/
 # Results and predictions
 predictions/
 results/
+data/
 *.csv
 *.json
 *.txt

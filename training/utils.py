@@ -6,9 +6,24 @@ import random
 
 import numpy as np
 import torch
+from torch import nn
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig
+
+
+class MLPClassifier(nn.Module):
+    """Simple MLP classifier for gene pair classification."""
+    def __init__(self, input_dim: int, hidden_dim: int = 64):
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(input_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.model(x)
 
 
 def compute_embeddings_hash(emb_dict: dict) -> str:
@@ -117,11 +132,14 @@ def setup_model_and_tokenizer(model_name: str):
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Load model without device_map (DeepSpeed will handle placement)
-    # Use auto dtype but let accelerate config control precision
+    # Flash Attention 2 requires Ampere (CC >= 8.0); fall back to sdpa on V100/Pascal
+    _cc = torch.cuda.get_device_capability() if torch.cuda.is_available() else (0, 0)
+    _attn_impl = "flash_attention_2" if _cc[0] >= 8 else "sdpa"
+    print(f"GPU compute capability: {_cc}  →  attn_implementation={_attn_impl!r}")
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
-        torch_dtype="auto"  # Let accelerate config handle precision
+        torch_dtype="auto",
+        attn_implementation=_attn_impl,
     )
 
     print(f"Model loaded successfully")
@@ -158,6 +176,11 @@ def create_training_config(output_dir: str, batch_size: int, num_generations: in
         dataloader_pin_memory=True,
         dataloader_num_workers=0,
         max_completion_length=200,
+        report_to=[],
+        use_vllm=True,
+        vllm_gpu_memory_utilization=0.35,
+        vllm_max_model_len=2048,
+        vllm_enable_prefix_caching=True,
     )
 
     return config
